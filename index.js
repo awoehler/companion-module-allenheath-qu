@@ -60,20 +60,31 @@ class instance extends InstanceBase {
 		this.config = { host: '192.168.0.6', model: 'QU16' }
 	}
 
-	actions(system) {
-		this.setActions(this.getActions())
+	actions() {
+		const definitions = this.getActions()
+		for (const [id, definition] of Object.entries(definitions)) {
+			definition.name = definition.label
+			definition.callback = (event) => this.action({ action: id, options: event.options })
+		}
+		this.setActionDefinitions(definitions)
 	}
-
-	feedbacks(system) {
+	feedbacks() {
 		this.setFeedbackDefinitions(this.getFeedbacks())
 	}
-
-	variables(system) {
+	variables() {
 		this.setVariableDefinitions(this.getVariables())
 	}
-
-	presets(system) {
+	presets() {
 		this.setPresetDefinitions(this.getPresets())
+	}
+	setVariable(name, value) {
+		this.variableState.set(name, value)
+		this.setVariableValues({ [name]: value })
+	}
+	getVariable(name, callback) {
+		const value = this.variableState.get(name)
+		if (callback) callback(value)
+		return value
 	}
 
 	action(action) {
