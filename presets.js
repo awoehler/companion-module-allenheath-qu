@@ -1,3 +1,4 @@
+const { combineRgb } = require('@companion-module/base')
 const quconfig = require('./quconfig.json')
 
 module.exports = {
@@ -19,8 +20,8 @@ module.exports = {
 						style: 'text',
 						text: `\$(QU:ch_name_${ofs + i})\\nMute`,
 						size: 'auto',
-						color: this.rgb(255, 255, 255),
-						bgcolor: this.rgb(0, 0, 0),
+						color: combineRgb(255, 255, 255),
+						bgcolor: combineRgb(0, 0, 0),
 						latch: false,
 					},
 					actions: [
@@ -42,7 +43,7 @@ module.exports = {
 					],
 				}
 
-				presets.push(pst)
+				presets.push({ type: 'button', category: pst.category, name: pst.label, style: { text: pst.bank.text.replaceAll('\\\\n', '\\n'), size: 'auto', color: pst.bank.color, bgcolor: pst.bank.bgcolor }, steps: [{ down: pst.actions.map(a => ({ actionId: a.action, options: a.options })), up: [] }], feedbacks: pst.feedbacks.map(f => ({ feedbackId: f.type, options: f.options })) })
 			}
 		}
 
@@ -74,8 +75,8 @@ module.exports = {
 						style: 'text',
 						text: `\$(QU:ch_name_${ofs + i})\\nPAFL`,
 						size: 'auto',
-						color: this.rgb(255, 255, 255),
-						bgcolor: this.rgb(0, 0, 0),
+						color: combineRgb(255, 255, 255),
+						bgcolor: combineRgb(0, 0, 0),
 						latch: false,
 					},
 					actions: [
@@ -97,7 +98,7 @@ module.exports = {
 					],
 				}
 
-				presets.push(pst)
+				presets.push({ type: 'button', category: pst.category, name: pst.label, style: { text: pst.bank.text.replaceAll('\\\\n', '\\n'), size: 'auto', color: pst.bank.color, bgcolor: pst.bank.bgcolor }, steps: [{ down: pst.actions.map(a => ({ actionId: a.action, options: a.options })), up: [] }], feedbacks: pst.feedbacks.map(f => ({ feedbackId: f.type, options: f.options })) })
 			}
 		}
 
