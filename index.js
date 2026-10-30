@@ -78,7 +78,7 @@ class instance extends InstanceBase {
 
 	action(action) {
 		var opt = action.options
-		let channel = parseInt(opt.channel)
+		let channel = parseInt(opt.channel ?? 0)
 		let CH
 		let cmd = { port: MIDI, buffers: [] }
 		let sceneNumber
@@ -652,10 +652,10 @@ class instance extends InstanceBase {
 		}
 	}
 
-	config_fields() {
+	getConfigFields() {
 		return [
 			{
-				type: 'text',
+				type: 'static-text',
 				id: 'info',
 				width: 12,
 				label: 'Information',
@@ -735,5 +735,4 @@ class instance extends InstanceBase {
 	}
 }
 runEntrypoint(instance, [])
-
-exports = module.exports = instance
+module.exports = instance
