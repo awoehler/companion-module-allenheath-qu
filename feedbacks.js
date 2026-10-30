@@ -1,3 +1,4 @@
+const { combineRgb } = require('@companion-module/base')
 const quconfig = require('./quconfig.json')
 
 module.exports = {
@@ -8,12 +9,15 @@ module.exports = {
 		if (!qu) return feedbacks
 
 		const createtFdb = (nam, typ, lab, col, chs, ofs) => {
-			let fg = this.rgb(col['fg'][0], col['fg'][1], col['fg'][2])
-			let bg = this.rgb(col['bg'][0], col['bg'][1], col['bg'][2])
+			let fg = combineRgb(col['fg'][0], col['fg'][1], col['fg'][2])
+			let bg = combineRgb(col['bg'][0], col['bg'][1], col['bg'][2])
 
 			feedbacks[nam] = {
 				label: `${typ} ${lab}`,
-				description: 'Change colour',
+				type: 'boolean',
+			name: `${typ} ${lab}`,
+			description: 'Active when the console reports this state',
+			defaultStyle: { color: fg, bgcolor: bg },
 				options: [
 					{
 						type: 'colorpicker',
@@ -36,13 +40,7 @@ module.exports = {
 						minChoicesForSearch: 0,
 					},
 				],
-				callback: (feedback, bank) => {
-					return this.feedbackStatus(
-						feedback,
-						bank,
-						`${typ.toLowerCase()}_` + (parseInt(feedback.options.channel) + ofs)
-					)
-				},
+				callback: (feedback) => !!this.fdbState[`${typ.toLowerCase()}_` + (parseInt(feedback.options.channel) + ofs)],
 			}
 		}
 
