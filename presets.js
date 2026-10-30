@@ -43,7 +43,7 @@ module.exports = {
 					],
 				}
 
-				presets.push({ type: 'button', category: pst.category, name: pst.label, style: { text: pst.bank.text.replaceAll('\\\\n', '\\n'), size: 'auto', color: pst.bank.color, bgcolor: pst.bank.bgcolor }, steps: [{ down: pst.actions.map(a => ({ actionId: a.action, options: a.options })), up: [] }], feedbacks: pst.feedbacks.map(f => ({ feedbackId: f.type, options: f.options })) })
+				presets.push({ type: 'button', category: pst.category, name: pst.label, style: { text: pst.bank.text.replaceAll('\\n', '\n'), size: 'auto', color: pst.bank.color, bgcolor: pst.bank.bgcolor }, steps: [{ down: pst.actions.map(a => ({ actionId: a.action, options: a.options })), up: [] }], feedbacks: pst.feedbacks.map(f => ({ feedbackId: f.type, options: f.options })) })
 			}
 		}
 
@@ -98,7 +98,7 @@ module.exports = {
 					],
 				}
 
-				presets.push({ type: 'button', category: pst.category, name: pst.label, style: { text: pst.bank.text.replaceAll('\\\\n', '\\n'), size: 'auto', color: pst.bank.color, bgcolor: pst.bank.bgcolor }, steps: [{ down: pst.actions.map(a => ({ actionId: a.action, options: a.options })), up: [] }], feedbacks: pst.feedbacks.map(f => ({ feedbackId: f.type, options: f.options })) })
+				presets.push({ type: 'button', category: pst.category, name: pst.label, style: { text: pst.bank.text.replaceAll('\\n', '\n'), size: 'auto', color: pst.bank.color, bgcolor: pst.bank.bgcolor }, steps: [{ down: pst.actions.map(a => ({ actionId: a.action, options: a.options })), up: [] }], feedbacks: pst.feedbacks.map(f => ({ feedbackId: f.type, options: f.options })) })
 			}
 		}
 
