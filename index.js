@@ -32,8 +32,7 @@
  *			- Add shutdown action
  */
 
-let tcp = require('../../tcp')
-let instance_skel = require('../../instance_skel')
+const { TCPHelper, InstanceBase, InstanceStatus, Regex } = require('@companion-module/base')
 let actions = require('./actions')
 let feedbacks = require('./feedbacks')
 let variables = require('./variables')
@@ -44,9 +43,9 @@ const quconfig = require('./quconfig.json')
 const MIDI = 51325
 const SysexHeader = [0xf0, 0x00, 0x00, 0x1a, 0x50, 0x11, 0x01, 0x00, 0x00]
 
-class instance extends instance_skel {
-	constructor(system, id, config) {
-		super(system, id, config)
+class instance extends InstanceBase {
+	constructor(internal) {
+		super(internal)
 
 		Object.assign(this, {
 			...variables,
@@ -56,27 +55,79 @@ class instance extends instance_skel {
 		})
 
 		this.fdbState = {}
+		this.levelState = new Map()
+		this.variableState = new Map()
+		this.pendingMidiData = []
+		this.config = { host: '192.168.0.6', model: 'QU16' }
 	}
 
-	actions(system) {
-		this.setActions(this.getActions())
+	actions() {
+		const definitions = this.getActions()
+		for (const [id, definition] of Object.entries(definitions)) {
+			definition.name = definition.label
+			definition.callback = (event) => this.action({ action: id, options: event.options })
+		}
+		this.setActionDefinitions(definitions)
 	}
-
-	feedbacks(system) {
+	feedbacks() {
 		this.setFeedbackDefinitions(this.getFeedbacks())
 	}
-
-	variables(system) {
-		this.setVariableDefinitions(this.getVariables())
+	variables() {
+		const { definitions, initialValues } = this.getVariables()
+		const variableDefinitions = {}
+		for (const { variableId, label } of definitions) {
+			variableDefinitions[variableId] = { name: label }
+		}
+		this.setVariableDefinitions(variableDefinitions)
+		for (const [name, value] of Object.entries(initialValues)) {
+			this.variableState.set(name, value)
+		}
+		this.setVariableValues(initialValues)
 	}
+	presets() {
+		const presets = {}
+		const sections = []
+		const sectionsByName = new Map()
+		const feedbackDefinitions = this.getFeedbacks()
 
-	presets(system) {
-		this.setPresetDefinitions(this.getPresets())
+		for (const preset of this.getPresets()) {
+			let section = sectionsByName.get(preset.category)
+			if (!section) {
+				const sectionId = `presets_${preset.category.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`
+				section = { id: sectionId, name: preset.category, definitions: [] }
+				sections.push(section)
+				sectionsByName.set(preset.category, section)
+			}
+
+			const presetId = `${section.id}_${section.definitions.length}`
+			section.definitions.push(presetId)
+			presets[presetId] = {
+				type: 'simple',
+				name: preset.name,
+				style: preset.style,
+				steps: preset.steps,
+				feedbacks: preset.feedbacks.map((feedback) => ({
+					...feedback,
+					style: feedbackDefinitions[feedback.feedbackId]?.defaultStyle,
+				})),
+			}
+		}
+
+		this.setPresetDefinitions(sections, presets)
+	}
+	setVariable(name, value) {
+		this.variableState.set(name, value)
+		this.setVariableValues({ [name]: value })
+	}
+	getVariable(name, callback) {
+		const value = this.variableState.get(name)
+		if (callback) callback(value)
+		return value
 	}
 
 	action(action) {
 		var opt = action.options
-		let channel = parseInt(opt.channel)
+		let channel = parseInt(opt.channel ?? 0)
 		let CH
 		let cmd = { port: MIDI, buffers: [] }
 		let sceneNumber
@@ -234,8 +285,9 @@ class instance extends instance_skel {
 				if (lev >= 998) {
 					lev = self.getStepLevel(action.action, CH + channel, lev)
 				} else {
-					self.setVariable(`${action.action}_${CH + channel}`, self.getLevel(lev))
+					self.recordLevel(`${action.action}_${CH + channel}`, lev)
 				}
+				if (!Number.isInteger(lev) || lev < 0 || lev > 127) return
 				cmd.buffers = [Buffer.from([0xb0, 0x63, CH + channel, 0xb0, 0x62, 0x17, 0xb0, 0x06, lev, 0xb0, 0x26, 0x07])]
 			}
 
@@ -350,7 +402,10 @@ class instance extends instance_skel {
 
 			if (action.action.slice(0, 7) == 'sendlev') {
 				let lev = parseInt(opt.level)
+				const key = self.levelKey(action.action, CH + channel, parseInt(opt.mix))
 				if (lev >= 998) lev = self.getStepLevel(action.action, CH + channel, lev, parseInt(opt.mix))
+				else self.recordLevel(key, lev)
+				if (!Number.isInteger(lev) || lev < 0 || lev > 127) return
 				cmd.buffers = [
 					Buffer.from([0xb0, 0x63, CH + channel, 0xb0, 0x62, 0x20, 0xb0, 0x06, lev, 0xb0, 0x26, parseInt(opt.mix)]),
 				]
@@ -364,9 +419,15 @@ class instance extends instance_skel {
 		}
 
 		for (let i = 0; i < cmd.buffers.length; i++) {
-			if (cmd.port === MIDI && this.midiSocket !== undefined) {
-				//console.log(cmd.buffers[i]);
-				this.midiSocket.write(cmd.buffers[i])
+			if (cmd.port === MIDI) {
+				if (this.midiSocket === undefined) {
+					this.log('warn', `Cannot send ${action.action}: MIDI socket is unavailable.`)
+					continue
+				}
+				if (action.action.startsWith('level_') || action.action.startsWith('sendlev_')) {
+					this.log('info', `Sending ${action.action} MIDI: ${cmd.buffers[i].toString('hex')}`)
+				}
+				this.midiSocket.send(cmd.buffers[i])
 			}
 		}
 	}
@@ -385,56 +446,68 @@ class instance extends instance_skel {
 		return scn
 	}
 
-	getStepLevel(act, ch, step, mix = 999) {
-		var self = this
-		var db
-		var dc = '999'
-
-		self.getVariable(`${act}_${ch}` + (mix != 999 ? `_${mix}` : ''), function (res) {
-			if (res !== undefined) {
-				if (res == '-inf') res = -56
-				res = parseFloat(res.toString().replace(/^[\+]?/g, '')) + (step == 998 ? -1 : 1)
-
-				if (res > -45 && res < -40) res = step == 998 ? -45 : -40
-				if (res > -50 && res < -45) res = step == 998 ? -50 : -45
-				if (res > -55 && res < -50) res = step == 998 ? -55 : -50
-				if (res < -55) res = step == 998 ? '-inf' : -55
-
-				if (res != '-inf') {
-					let lv = level.level
-					for (let i = 0; i < lv.length; i++) {
-						let j = i + 1 < lv.length ? i + 1 : 0
-						let v1 = parseFloat(lv[i][0].replace(/^[\+]?/g, ''))
-						let v2 = parseInt(lv[i][1], 16)
-
-						if ((j == 0 && res < v1) || (j == 1 && res > v1) || res == v1) {
-							dc = v1
-							db = v2
-							break
-						} else if (j > 0) {
-							let zx = parseFloat(lv[j][0].replace(/^[\+]?/g, ''))
-
-							if (v1 > res && res > zx) {
-								if (v1 - res <= res - zx) {
-									dc = v1
-									db = v2
-								} else {
-									dc = zx
-									db = parseInt(lv[j][1], 16)
-								}
-								break
-							}
-						}
+	levelKey(action, channel, mix) {
+		// Send-level responses use the destination type, not the action's '_mix' suffix.
+		if (!action.startsWith('sendlev_')) return `${action}_${channel}`
+		const destination = this.getSend(mix)?.[0]
+		return destination ? `${action.replace(/_(mix|group|fxs)$/, '')}_${destination}_${channel}_${mix}` : `${action}_${channel}_${mix}`
+	}
+	recordLevel(key, midiValue) {
+		if (!Number.isInteger(midiValue) || midiValue < 0 || midiValue > 127) return
+		this.levelState.set(key, midiValue)
+		const value = this.getLevel(midiValue)
+		if (value !== undefined) this.setVariable(key, value)
+	}
+	getStepLevel(action, channel, step, mix = 999) {
+		const key = mix === 999 ? `${action}_${channel}` : this.levelKey(action, channel, mix)
+		let current = this.levelState.get(key)
+		if (current === undefined) {
+			const stored = this.getVariable(key)
+			if (stored !== undefined) {
+				const found = level.level.find(([db]) => db === String(stored))
+				if (found) current = parseInt(found[1], 16)
+			}
+		}
+		if (current === undefined) {
+			this.log('warn', `Cannot step ${key}: no known level. Set an absolute level first or move the console fader to refresh state.`)
+			return undefined
+		}
+		const currentDb = this.getLevel(current)
+		if (currentDb === undefined) {
+			this.log('warn', `Cannot step ${key}: MIDI level 0x${current.toString(16)} is not in the level map.`)
+			return undefined
+		}
+		const direction = step === 998 ? -1 : 1
+		if (currentDb === '-inf' && direction < 0) {
+			this.log('warn', `Cannot step ${key} down from -inf.`)
+			return undefined
+		}
+		const target = currentDb === '-inf' ? -55 : Number(currentDb) + direction
+		const candidates = level.level.filter(([db]) => db !== '-inf')
+		let best = candidates[0]
+		for (const candidate of candidates) {
+			if (Math.abs(Number(candidate[0]) - target) < Math.abs(Number(best[0]) - target)) best = candidate
+		}
+		if (Number(best[0]) === Number(currentDb)) {
+			const directional = candidates.filter(([db]) => direction * (Number(db) - Number(currentDb)) > 0)
+			if (directional.length > 0) {
+				best = directional[0]
+				for (const candidate of directional) {
+					if (Math.abs(Number(candidate[0]) - Number(currentDb)) < Math.abs(Number(best[0]) - Number(currentDb))) {
+						best = candidate
 					}
-				} else {
-					dc = res
-					db = 0
 				}
 			}
-		})
-
-		if (dc != 999) self.setVariable(`${act}_${ch}` + (mix != 999 ? `_${mix}` : ''), dc)
-		return db
+		}
+		const next = parseInt(best[1], 16)
+		this.recordLevel(key, next)
+		const directionLabel = direction < 0 ? '-1 dB' : '+1 dB'
+		const formatLevel = (midiValue, db) => `${db} dB/0x${midiValue.toString(16).padStart(2, '0')}`
+		this.log(
+			'info',
+			`Relative level step ${key} (${directionLabel}): ${formatLevel(current, currentDb)} -> ${formatLevel(next, this.getLevel(next))}.`
+		)
+		return next
 	}
 
 	getChannel(ch) {
@@ -578,7 +651,7 @@ class instance extends instance_skel {
 
 		for (let i = 0; i < cmd.length; i++) {
 			if (this.midiSocket !== undefined) {
-				this.midiSocket.write(cmd[i])
+				this.midiSocket.send(cmd[i])
 			}
 		}
 	}
@@ -625,15 +698,23 @@ class instance extends instance_skel {
 					/* Fader Level */
 					if (dt[1] == 99 && dt[5] == 23) {
 						let rt = self.getChannel(dt[2])
-						self.setVariable(`level_${rt[0]}_${dt[2]}`, self.getLevel(dt[8]))
+						const key = `level_${rt[0]}_${dt[2]}`
+						self.recordLevel(key, dt[8])
+						self.log('debug', `Received fader level ${key}: ${self.getLevel(dt[8])} dB (MIDI 0x${dt[8].toString(16).padStart(2, '0')}).`)
 					}
 
 					/* Send Level */
 					if (dt[1] == 99 && dt[5] == 32) {
 						let rt = self.getChannel(dt[2])
 						let vx = self.getSend(dt[11])
-						//console.log(`sendlev_${rt[0]}_${dt[2]}_${vx[0]}_${dt[11]} -> ${vl}`);
-						self.setVariable(`sendlev_${rt[0]}_${vx[0]}_${dt[2]}_${dt[11]}`, self.getLevel(dt[8]))
+						if (vx[0]) {
+							const key = `sendlev_${rt[0]}_${vx[0]}_${dt[2]}_${dt[11]}`
+							self.recordLevel(key, dt[8])
+							self.log(
+								'debug',
+								`Received send level ${key}: ${self.getLevel(dt[8])} dB (MIDI 0x${dt[8].toString(16).padStart(2, '0')}).`
+							)
+						}
 					}
 
 					/* PAFL */
@@ -654,10 +735,43 @@ class instance extends instance_skel {
 		}
 	}
 
-	config_fields() {
+	receiveMidiData(data) {
+		this.pendingMidiData.push(...data)
+		if (this.pendingMidiData.length > 65536) {
+			this.log('warn', 'Discarding incomplete MIDI data buffer after exceeding 64 KB.')
+			this.pendingMidiData = []
+			return
+		}
+
+		const pending = this.pendingMidiData
+		for (let i = 0; i <= pending.length - 12; ) {
+			if (
+				pending[i] == 0xb0 &&
+				pending[i + 3] == 0xb0 &&
+				pending[i + 4] == 0x62 &&
+				pending[i + 6] == 0xb0 &&
+				pending[i + 9] == 0xb0 &&
+				pending[i + 10] == 0x26
+			) {
+				this.getRemoteValue(pending.slice(i, i + 12))
+				pending.splice(i, 12)
+			} else {
+				i++
+			}
+		}
+
+		const lastControl = pending.lastIndexOf(0xb0)
+		const hasIncompleteControl = lastControl >= 0 && pending.length - lastControl < 12
+		if (!hasIncompleteControl && [247, 254, 0, 7].includes(pending[pending.length - 1])) {
+			this.getRemoteValue(pending)
+			pending.length = 0
+		}
+	}
+
+	getConfigFields() {
 		return [
 			{
-				type: 'text',
+				type: 'static-text',
 				id: 'info',
 				width: 12,
 				label: 'Information',
@@ -669,7 +783,7 @@ class instance extends instance_skel {
 				label: 'Target IP',
 				width: 6,
 				default: '192.168.0.6',
-				regex: this.REGEX_IP,
+				regex: Regex.IP,
 			},
 			{
 				type: 'dropdown',
@@ -688,82 +802,61 @@ class instance extends instance_skel {
 		]
 	}
 
-	destroy() {
-		clearInterval(this.connItv);
-
-		if (this.tcpSocket !== undefined) {
-			this.tcpSocket.destroy()
-		}
-
-		if (this.midiSocket !== undefined) {
-			this.midiSocket.destroy()
-		}
-
-		this.log('debug', `destroyed ${this.id}`)
+	async destroy() {
+		clearInterval(this.connItv)
+		if (this.midiSocket) this.midiSocket.destroy()
+		this.midiSocket = undefined
 	}
-
-	init() {
-		this.updateConfig(this.config)
-		this.setVariable('currentScene', 0)
+	async init(config) {
+		this.log('info', 'Initializing Allen & Heath QU module.')
+		try {
+			this.updateConfig(config)
+		} catch (error) {
+			this.log('error', `Initialization failed: ${error instanceof Error ? error.stack || error.message : String(error)}`)
+			throw error
+		}
+		this.log('info', 'Initialization completed.')
 	}
-
 	init_tcp() {
-		var self = this
-		this.chk = false
-
-		if (this.midiSocket !== undefined) {
-			this.midiSocket.destroy()
-			delete this.midiSocket
-		}
-
-		if (this.config.host) {
-			this.midiSocket = new tcp(this.config.host, MIDI)
-
-			this.midiSocket.on('status_change', (status, message) => {
-				this.status(status, message)
-			})
-
-			this.midiSocket.on('error', (err) => {
-				this.log('error', 'MIDI error: ' + err.message)
-				this.chk = false
-			})
-
-			this.midiSocket.on('connect', () => {
-				this.log('debug', `MIDI Connected to ${this.config.host}`)
-
-				this.midiSocket.write(Buffer.from(SysexHeader.concat([0x10, 1, 0xf7])))
-				this.getNames()
-
-				this.connItv = setInterval(function () {
-					self.midiSocket.write(Buffer.from([0xfe]))
-				}, 1000)
-			})
-
-			var adat = []
-			this.midiSocket.on('data', (data) => {
-				let dt = JSON.parse(JSON.stringify(data))['data']
-				if (dt.length > 1) {
-					adat = adat.concat(dt)
-					//console.log(adat);
-					if ([247, 254, 0, 7].includes(adat[adat.length - 1])) {
-						this.getRemoteValue(adat)
-						//console.log(adat);
-						adat = []
-					}
-				}
-			})
-		}
+		clearInterval(this.connItv)
+		if (this.midiSocket) this.midiSocket.destroy()
+		this.midiSocket = undefined
+		if (!this.config.host) return
+		const socket = new TCPHelper(this.config.host, MIDI)
+		this.midiSocket = socket
+		socket.on('status_change', (status) => this.updateStatus(status))
+		socket.on('error', (error) => this.log('error', `MIDI error: ${error.message}`))
+		socket.on('connect', () => {
+			this.updateStatus(InstanceStatus.Ok)
+			socket.send(Buffer.from(SysexHeader.concat([0x10, 1, 0xf7])))
+			this.getNames()
+			this.connItv = setInterval(() => {
+				if (this.midiSocket === socket) socket.send(Buffer.from([0xfe]))
+			}, 1000)
+		})
+		socket.on('data', (data) => this.receiveMidiData(data))
 	}
-
+	async configUpdated(config) {
+		this.updateConfig(config)
+	}
 	updateConfig(config) {
-		this.config = config
-
+		this.config = config || {}
+		if (!this.config.host || !this.config.model) {
+			this.log(
+				'warn',
+				`Connection settings are incomplete (Target IP configured: ${Boolean(this.config.host)}, Console Type configured: ${Boolean(this.config.model)}).`
+			)
+		}
+		this.log('debug', 'Registering variable definitions.')
 		this.variables()
+		this.log('debug', 'Registering action definitions.')
 		this.actions()
+		this.log('debug', 'Registering feedback definitions.')
 		this.feedbacks()
+		this.log('debug', 'Registering preset definitions.')
 		this.presets()
+		this.log('debug', 'Initializing MIDI connection.')
 		this.init_tcp()
 	}
 }
-
-exports = module.exports = instance
+module.exports = instance

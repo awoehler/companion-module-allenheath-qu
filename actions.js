@@ -372,7 +372,7 @@ module.exports = {
 			options: this.faderOptions('Stereo Channel', qu['chStereo'], -1),
 		}
 		actions['level_lr'] = {
-			label: 'LR Fadel Level',
+			label: 'LR Fader Level',
 			options: this.faderOptions('LR', 1, -1),
 		}
 		actions['level_mix'] = {

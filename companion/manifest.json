@@ -1,0 +1,36 @@
+{
+  "type": "connection",
+  "id": "allenheath-qu",
+  "name": "allenheath-qu",
+  "shortname": "QU",
+  "description": "Allen & Heath Qu series MIDI over TCP",
+  "version": "2.0.0",
+  "license": "MIT",
+  "repository": "git+https://github.com/awoehler/companion-module-allenheath-qu.git",
+  "bugs": "https://github.com/awoehler/companion-module-allenheath-qu/issues",
+  "maintainers": [
+    {
+      "name": "A. Woehler"
+    }
+  ],
+  "legacyIds": [],
+  "runtime": {
+    "type": "node26",
+    "api": "nodejs-ipc",
+    "apiVersion": "0.0.0",
+    "entrypoint": "../index.js"
+  },
+  "manufacturer": "Allen & Heath",
+  "products": [
+    "QU16",
+    "QU24",
+    "QU32",
+    "QUSB",
+    "QUPAC"
+  ],
+  "keywords": [
+    "Qu",
+    "MIDI",
+    "mixing console"
+  ]
+}
