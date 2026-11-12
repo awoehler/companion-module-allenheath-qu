@@ -32,7 +32,7 @@
  *			- Add shutdown action
  */
 
-const { TCPHelper, InstanceBase, InstanceStatus, Regex, runEntrypoint } = require('@companion-module/base')
+const { TCPHelper, InstanceBase, InstanceStatus, Regex } = require('@companion-module/base')
 let actions = require('./actions')
 let feedbacks = require('./feedbacks')
 let variables = require('./variables')
@@ -57,6 +57,7 @@ class instance extends InstanceBase {
 		this.fdbState = {}
 		this.levelState = new Map()
 		this.variableState = new Map()
+		this.pendingMidiData = []
 		this.config = { host: '192.168.0.6', model: 'QU16' }
 	}
 
@@ -72,10 +73,47 @@ class instance extends InstanceBase {
 		this.setFeedbackDefinitions(this.getFeedbacks())
 	}
 	variables() {
-		this.setVariableDefinitions(this.getVariables())
+		const { definitions, initialValues } = this.getVariables()
+		const variableDefinitions = {}
+		for (const { variableId, label } of definitions) {
+			variableDefinitions[variableId] = { name: label }
+		}
+		this.setVariableDefinitions(variableDefinitions)
+		for (const [name, value] of Object.entries(initialValues)) {
+			this.variableState.set(name, value)
+		}
+		this.setVariableValues(initialValues)
 	}
 	presets() {
-		this.setPresetDefinitions(this.getPresets())
+		const presets = {}
+		const sections = []
+		const sectionsByName = new Map()
+		const feedbackDefinitions = this.getFeedbacks()
+
+		for (const preset of this.getPresets()) {
+			let section = sectionsByName.get(preset.category)
+			if (!section) {
+				const sectionId = `presets_${preset.category.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`
+				section = { id: sectionId, name: preset.category, definitions: [] }
+				sections.push(section)
+				sectionsByName.set(preset.category, section)
+			}
+
+			const presetId = `${section.id}_${section.definitions.length}`
+			section.definitions.push(presetId)
+			presets[presetId] = {
+				type: 'simple',
+				name: preset.name,
+				style: preset.style,
+				steps: preset.steps,
+				feedbacks: preset.feedbacks.map((feedback) => ({
+					...feedback,
+					style: feedbackDefinitions[feedback.feedbackId]?.defaultStyle,
+				})),
+			}
+		}
+
+		this.setPresetDefinitions(sections, presets)
 	}
 	setVariable(name, value) {
 		this.variableState.set(name, value)
@@ -381,8 +419,14 @@ class instance extends InstanceBase {
 		}
 
 		for (let i = 0; i < cmd.buffers.length; i++) {
-			if (cmd.port === MIDI && this.midiSocket !== undefined) {
-				//console.log(cmd.buffers[i]);
+			if (cmd.port === MIDI) {
+				if (this.midiSocket === undefined) {
+					this.log('warn', `Cannot send ${action.action}: MIDI socket is unavailable.`)
+					continue
+				}
+				if (action.action.startsWith('level_') || action.action.startsWith('sendlev_')) {
+					this.log('info', `Sending ${action.action} MIDI: ${cmd.buffers[i].toString('hex')}`)
+				}
 				this.midiSocket.send(cmd.buffers[i])
 			}
 		}
@@ -429,20 +473,40 @@ class instance extends InstanceBase {
 			return undefined
 		}
 		const currentDb = this.getLevel(current)
-		if (currentDb === undefined) return undefined
-		const atFloor = currentDb === '-inf'
-		const target = atFloor ? (step === 999 ? -55 : -Infinity) : Number(currentDb) + (step === 998 ? -1 : 1)
-		let next
-		if (target === -Infinity || target < -55) next = 0
-		else {
-			const candidates = level.level.filter(([db]) => db !== '-inf')
-			let best = candidates[0]
-			for (const candidate of candidates) {
-				if (Math.abs(Number(candidate[0]) - target) < Math.abs(Number(best[0]) - target)) best = candidate
-			}
-			next = parseInt(best[1], 16)
+		if (currentDb === undefined) {
+			this.log('warn', `Cannot step ${key}: MIDI level 0x${current.toString(16)} is not in the level map.`)
+			return undefined
 		}
+		const direction = step === 998 ? -1 : 1
+		if (currentDb === '-inf' && direction < 0) {
+			this.log('warn', `Cannot step ${key} down from -inf.`)
+			return undefined
+		}
+		const target = currentDb === '-inf' ? -55 : Number(currentDb) + direction
+		const candidates = level.level.filter(([db]) => db !== '-inf')
+		let best = candidates[0]
+		for (const candidate of candidates) {
+			if (Math.abs(Number(candidate[0]) - target) < Math.abs(Number(best[0]) - target)) best = candidate
+		}
+		if (Number(best[0]) === Number(currentDb)) {
+			const directional = candidates.filter(([db]) => direction * (Number(db) - Number(currentDb)) > 0)
+			if (directional.length > 0) {
+				best = directional[0]
+				for (const candidate of directional) {
+					if (Math.abs(Number(candidate[0]) - Number(currentDb)) < Math.abs(Number(best[0]) - Number(currentDb))) {
+						best = candidate
+					}
+				}
+			}
+		}
+		const next = parseInt(best[1], 16)
 		this.recordLevel(key, next)
+		const directionLabel = direction < 0 ? '-1 dB' : '+1 dB'
+		const formatLevel = (midiValue, db) => `${db} dB/0x${midiValue.toString(16).padStart(2, '0')}`
+		this.log(
+			'info',
+			`Relative level step ${key} (${directionLabel}): ${formatLevel(current, currentDb)} -> ${formatLevel(next, this.getLevel(next))}.`
+		)
 		return next
 	}
 
@@ -634,15 +698,23 @@ class instance extends InstanceBase {
 					/* Fader Level */
 					if (dt[1] == 99 && dt[5] == 23) {
 						let rt = self.getChannel(dt[2])
-						self.recordLevel(`level_${rt[0]}_${dt[2]}`, dt[8])
+						const key = `level_${rt[0]}_${dt[2]}`
+						self.recordLevel(key, dt[8])
+						self.log('debug', `Received fader level ${key}: ${self.getLevel(dt[8])} dB (MIDI 0x${dt[8].toString(16).padStart(2, '0')}).`)
 					}
 
 					/* Send Level */
 					if (dt[1] == 99 && dt[5] == 32) {
 						let rt = self.getChannel(dt[2])
 						let vx = self.getSend(dt[11])
-						//console.log(`sendlev_${rt[0]}_${dt[2]}_${vx[0]}_${dt[11]} -> ${vl}`);
-						if (vx[0]) self.recordLevel(`sendlev_${rt[0]}_${vx[0]}_${dt[2]}_${dt[11]}`, dt[8])
+						if (vx[0]) {
+							const key = `sendlev_${rt[0]}_${vx[0]}_${dt[2]}_${dt[11]}`
+							self.recordLevel(key, dt[8])
+							self.log(
+								'debug',
+								`Received send level ${key}: ${self.getLevel(dt[8])} dB (MIDI 0x${dt[8].toString(16).padStart(2, '0')}).`
+							)
+						}
 					}
 
 					/* PAFL */
@@ -660,6 +732,39 @@ class instance extends InstanceBase {
 					self.setVariable('currentScene', parseInt(data[b+1]) + 1)
 				}
 			}
+		}
+	}
+
+	receiveMidiData(data) {
+		this.pendingMidiData.push(...data)
+		if (this.pendingMidiData.length > 65536) {
+			this.log('warn', 'Discarding incomplete MIDI data buffer after exceeding 64 KB.')
+			this.pendingMidiData = []
+			return
+		}
+
+		const pending = this.pendingMidiData
+		for (let i = 0; i <= pending.length - 12; ) {
+			if (
+				pending[i] == 0xb0 &&
+				pending[i + 3] == 0xb0 &&
+				pending[i + 4] == 0x62 &&
+				pending[i + 6] == 0xb0 &&
+				pending[i + 9] == 0xb0 &&
+				pending[i + 10] == 0x26
+			) {
+				this.getRemoteValue(pending.slice(i, i + 12))
+				pending.splice(i, 12)
+			} else {
+				i++
+			}
+		}
+
+		const lastControl = pending.lastIndexOf(0xb0)
+		const hasIncompleteControl = lastControl >= 0 && pending.length - lastControl < 12
+		if (!hasIncompleteControl && [247, 254, 0, 7].includes(pending[pending.length - 1])) {
+			this.getRemoteValue(pending)
+			pending.length = 0
 		}
 	}
 
@@ -703,8 +808,14 @@ class instance extends InstanceBase {
 		this.midiSocket = undefined
 	}
 	async init(config) {
-		this.config = config
-		this.updateConfig(config)
+		this.log('info', 'Initializing Allen & Heath QU module.')
+		try {
+			this.updateConfig(config)
+		} catch (error) {
+			this.log('error', `Initialization failed: ${error instanceof Error ? error.stack || error.message : String(error)}`)
+			throw error
+		}
+		this.log('info', 'Initialization completed.')
 	}
 	init_tcp() {
 		clearInterval(this.connItv)
@@ -723,27 +834,29 @@ class instance extends InstanceBase {
 				if (this.midiSocket === socket) socket.send(Buffer.from([0xfe]))
 			}, 1000)
 		})
-		let pending = []
-		socket.on('data', (data) => {
-			pending = pending.concat([...data])
-			if (pending.length > 65536) pending = []
-			if ([247, 254, 0, 7].includes(pending[pending.length - 1])) {
-				this.getRemoteValue(pending)
-				pending = []
-			}
-		})
+		socket.on('data', (data) => this.receiveMidiData(data))
 	}
 	async configUpdated(config) {
 		this.updateConfig(config)
 	}
 	updateConfig(config) {
-		this.config = config
+		this.config = config || {}
+		if (!this.config.host || !this.config.model) {
+			this.log(
+				'warn',
+				`Connection settings are incomplete (Target IP configured: ${Boolean(this.config.host)}, Console Type configured: ${Boolean(this.config.model)}).`
+			)
+		}
+		this.log('debug', 'Registering variable definitions.')
 		this.variables()
+		this.log('debug', 'Registering action definitions.')
 		this.actions()
+		this.log('debug', 'Registering feedback definitions.')
 		this.feedbacks()
+		this.log('debug', 'Registering preset definitions.')
 		this.presets()
+		this.log('debug', 'Initializing MIDI connection.')
 		this.init_tcp()
 	}
 }
-runEntrypoint(instance, [])
 module.exports = instance

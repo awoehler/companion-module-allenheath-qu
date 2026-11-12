@@ -9,11 +9,13 @@ This branch ports the old Qu-series Companion 2.x module to the module API used 
 3. Restart or rescan developer modules, then create or update the Allen & Heath Qu connection.
 4. Select your console model (including QU32) and set the mixer IP address. The module uses MIDI over TCP, port 51325.
 
-## Safety note: relative send levels
+## Safety note: relative level steps
 
-Relative **Level Input to Mix** actions require a known current value. The older module used an uninitialized variable, which could produce an invalid value that became MIDI zero (-inf). This version tracks absolute levels and received mixer level reports using the input and destination as the key. When the current send level is unavailable, a step action is skipped and a warning is logged **instead of moving the send to -inf**. First use an absolute level action (or move the relevant mixer send so it reports its state) before stepping.
+Relative level actions require a known current value. The older module used an uninitialized variable, which could produce an invalid value that became MIDI zero (-inf). This version tracks absolute levels and received mixer level reports using the input and destination as the key. When the current level is unavailable, a step action is skipped and a warning is logged. First use an absolute level action (or move the relevant mixer fader/send so it reports its state) before stepping.
 
-The Qu MIDI level map is non-linear: the relative step targets the closest available level, with floor clamping. The -inf state only results from an intentional downward step at the minimum boundary. Validate against your mixer before using automation during a service.
+The Qu MIDI level map is non-linear. Relative steps use the nearest available level, advance to the next value when rounding would otherwise leave the level unchanged, and clamp at -55 dB. A downward step from -inf is skipped, so relative actions never send MIDI zero. Validate against your mixer before using automation during a service.
+
+Relative-step calculations and outgoing MIDI bytes are logged at info level. Received fader and send-level reports are logged at debug level to help diagnose stale or missing level state.
 
 ## Verification
 

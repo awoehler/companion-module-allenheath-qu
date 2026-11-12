@@ -4,8 +4,9 @@ module.exports = {
 	getVariables() {
 		var qu = quconfig['config'][this.config.model]
 		var variables = []
+		var initialValues = {}
 
-		if (!qu) return variables
+		if (!qu) return { definitions: variables, initialValues }
 
 		for (let i = 0; i < qu['chCount']; i++) {
 			variables.push({
@@ -18,7 +19,7 @@ module.exports = {
 				variableId: `ch_name_${32 + i}`,
 			})
 
-			this.setVariable(`ch_name_${32 + i}`, `CH ${i + 1}`)
+			initialValues[`ch_name_${32 + i}`] = `CH ${i + 1}`
 		}
 
 		for (let i = 0; i < qu['chStereo']; i++) {
@@ -32,7 +33,7 @@ module.exports = {
 				variableId: `ch_name_${64 + i}`,
 			})
 
-			this.setVariable(`ch_name_${64 + i}`, `ST ${i + 1}`)
+			initialValues[`ch_name_${64 + i}`] = `ST ${i + 1}`
 		}
 
 		for (let i = 0; i < qu['mixCount']; i++) {
@@ -46,7 +47,7 @@ module.exports = {
 				variableId: `ch_name_${96 + i}`,
 			})
 
-			this.setVariable(`ch_name_${96 + i}`, `Mix ${i + 1}`)
+			initialValues[`ch_name_${96 + i}`] = `Mix ${i + 1}`
 		}
 
 		let ca = 5
@@ -61,7 +62,7 @@ module.exports = {
 				variableId: `ch_name_${96 + i}`,
 			})
 
-			this.setVariable(`ch_name_${96 + i}`, `Mix ${ca}/${ca + 1}`)
+			initialValues[`ch_name_${96 + i}`] = `Mix ${ca}/${ca + 1}`
 			ca = ca + 2
 		}
 
@@ -78,7 +79,7 @@ module.exports = {
 					variableId: `ch_name_${104 + i}`,
 				})
 
-				this.setVariable(`ch_name_${104 + i}`, `Group ${ca}/${ca + 1}`)
+				initialValues[`ch_name_${104 + i}`] = `Group ${ca}/${ca + 1}`
 				ca = ca + 2
 			}
 
@@ -94,7 +95,7 @@ module.exports = {
 					variableId: `ch_name_${108 + i}`,
 				})
 
-				this.setVariable(`ch_name_${108 + i}`, `Matrix ${ca}/${ca + 1}`)
+				initialValues[`ch_name_${108 + i}`] = `Matrix ${ca}/${ca + 1}`
 				ca = ca + 2
 			}
 		}
@@ -110,7 +111,7 @@ module.exports = {
 				variableId: `ch_name_${0 + i}`,
 			})
 
-			this.setVariable(`ch_name_${0 + i}`, `FX Snd ${i + 1}`)
+			initialValues[`ch_name_${0 + i}`] = `FX Snd ${i + 1}`
 		}
 
 		for (let i = 0; i < qu['fxrCount']; i++) {
@@ -124,7 +125,7 @@ module.exports = {
 				variableId: `ch_name_${8 + i}`,
 			})
 
-			this.setVariable(`ch_name_${8 + i}`, `FX Rtn ${i + 1}`)
+			initialValues[`ch_name_${8 + i}`] = `FX Rtn ${i + 1}`
 		}
 
 		for (let i = 0; i < qu['dcaCount']; i++) {
@@ -138,7 +139,7 @@ module.exports = {
 				variableId: `ch_name_${16 + i}`,
 			})
 
-			this.setVariable(`ch_name_${16 + i}`, `DCA ${i + 1}`)
+			initialValues[`ch_name_${16 + i}`] = `DCA ${i + 1}`
 		}
 
 		for (let i = 0; i < qu['muteGroup']; i++) {
@@ -147,15 +148,15 @@ module.exports = {
 				variableId: `ch_name_${80 + i}`,
 			})
 
-			this.setVariable(`ch_name_${80 + i}`, `MuteGrp ${i + 1}`)
+			initialValues[`ch_name_${80 + i}`] = `MuteGrp ${i + 1}`
 		}
 
 		variables.push({
 			label: `Current scene`,
 			variableId: `currentScene`,
 		})
-		this.setVariable(`currentScene`, 1)
+		initialValues.currentScene = 1
 
-		return variables
+		return { definitions: variables, initialValues }
 	},
 }

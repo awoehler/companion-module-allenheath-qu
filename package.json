@@ -4,6 +4,7 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
+    "package": "companion-module-build",
     "test": "node --test",
     "check": "node --check index.js && node --check actions.js && node --check feedbacks.js && node --check presets.js && node --check variables.js"
   },
